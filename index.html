@@ -189,6 +189,26 @@
   .add-btn:hover { background: rgba(107,99,255,.25); }
 
   .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+
+  /* CAT CARDS EN RESUMEN */
+  .cat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 24px; }
+  .cat-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px;
+    border-left: 4px solid var(--accent);
+    transition: transform .1s;
+  }
+  .cat-card:hover { transform: translateY(-1px); }
+  .cat-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .cat-card-emoji { font-size: 22px; }
+  .cat-card-name { font-size: 14px; font-weight: 600; flex: 1; }
+  .cat-card-type { font-size: 10px; }
+  .cat-card-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .cat-card-num-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+  .cat-card-num-val { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; }
+  .cat-card-disponible { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .cat-card-disponible-label { font-size: 11px; color: var(--muted); }
+  .cat-card-disponible-val { font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700; }
   .donut-wrap { display: flex; flex-direction: column; align-items: center; padding: 24px; }
   .chart-legend { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; width: 100%; }
   .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
@@ -310,13 +330,16 @@
           <div class="card-value green" id="rs-disponible">₲ 0</div>
         </div>
       </div>
-      <div class="summary-grid">
+      <div class="section-title" style="margin-bottom:12px">Disponible por categoría</div>
+      <div class="cat-cards" id="rs-cat-cards"></div>
+
+      <div class="summary-grid" style="margin-top:24px">
         <div class="card donut-wrap">
           <canvas id="donutChart" width="180" height="180"></canvas>
           <div class="chart-legend" id="donutLegend"></div>
         </div>
         <div class="card">
-          <div class="section-title">Top categorías</div>
+          <div class="section-title">Top gastos del mes</div>
           <div id="top-cats"></div>
         </div>
       </div>
@@ -705,6 +728,46 @@ function renderResumen() {
   document.getElementById('rs-gastado').textContent = fmt(gastado);
   document.getElementById('rs-disponible').textContent = fmt(disp);
   document.getElementById('rs-disponible').className = 'card-value ' + (disp < 0 ? 'red' : 'green');
+
+  // Tarjetas por categoría
+  const catCards = document.getElementById('rs-cat-cards');
+  if (!categories.length) {
+    catCards.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📋</div><p>Creá categorías en la sección Presupuesto</p></div>`;
+  } else {
+    catCards.innerHTML = categories.map((cat, i) => {
+      const spent = spentForCat(cat.id, activeMonth);
+      const rem = cat.amount - spent;
+      const pct = cat.amount > 0 ? Math.min(100, (spent/cat.amount)*100) : 0;
+      const color = getColor(i);
+      const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
+      const remColor = rem < 0 ? 'var(--red)' : rem < cat.amount * 0.1 ? 'var(--yellow)' : 'var(--green)';
+      return `
+      <div class="cat-card" style="border-left-color:${color}">
+        <div class="cat-card-header">
+          <span class="cat-card-emoji">${cat.emoji||'📁'}</span>
+          <span class="cat-card-name">${cat.name}</span>
+          <span class="tag tag-${cat.type} cat-card-type">${cat.type==='fijo'?'Fijo':'Var.'}</span>
+        </div>
+        <div class="cat-card-nums">
+          <div>
+            <div class="cat-card-num-label">Presupuesto</div>
+            <div class="cat-card-num-val">${fmt(cat.amount)}</div>
+          </div>
+          <div>
+            <div class="cat-card-num-label">Gastado</div>
+            <div class="cat-card-num-val" style="color:var(--red)">${fmt(spent)}</div>
+          </div>
+        </div>
+        <div class="progress-bar" style="height:5px;margin-bottom:0">
+          <div class="progress-fill" style="width:${pct}%;background:${barColor}"></div>
+        </div>
+        <div class="cat-card-disponible">
+          <span class="cat-card-disponible-label">Disponible</span>
+          <span class="cat-card-disponible-val" style="color:${remColor}">${fmt(rem)}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
 
   const catData = categories.map((cat, i) => ({
     name: cat.name, emoji: cat.emoji||'📁',
