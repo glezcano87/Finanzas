@@ -323,7 +323,7 @@
     <section class="page active" id="page-resumen">
       <div class="page-header">
         <h1 id="resumen-title">Resumen</h1>
-        <p>Vista general de tu ciclo actual</p>
+        <p id="resumen-sub">Vista general de tu ciclo actual</p>
       </div>
       <div class="cards-row">
         <div class="card">
@@ -602,10 +602,22 @@ function actualizarUICiclo() {
   }
 }
 
-function cycleExpenses(catId) {
-  if (!activeCycle) return 0;
+function getCycleForMonth(monthKey) {
+  if (!monthKey) return activeCycle;
+  const [y, m] = monthKey.split('-');
+  const midMonth = new Date(+y, +m-1, 15);
+  const num = getCycleNumber(toDateStr(midMonth));
+  const existing = cycles.find(c => c.id === 'cycle_' + num);
+  if (existing) return existing;
+  const dates = getCycleDates(num);
+  return { id: 'cycle_' + num, start_date: dates.start, end_date: dates.end };
+}
+
+function cycleExpenses(catId, cycleId) {
+  const id = cycleId || (activeCycle ? activeCycle.id : null);
+  if (!id) return 0;
   return expenses
-    .filter(e => e.cat_id === catId && e.cycle_id === activeCycle.id)
+    .filter(e => e.cat_id === catId && e.cycle_id === id)
     .reduce((s, e) => s + e.amount, 0);
 }
 
@@ -662,7 +674,7 @@ db.channel('changes')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => loadAll())
   .subscribe();
 
-// ─── MESES (solo para filtro visual, NO afecta saldos) ────────────────────────
+// ─── MESES ────────────────────────────────────────────────────────────────────
 function buildMonthOptions() {
   const sel = document.getElementById('monthSelect');
   const usedMonths = new Set([currentMonthKey()]);
@@ -882,11 +894,16 @@ function renderGastos() {
 
 // ─── RESUMEN ──────────────────────────────────────────────────────────────────
 function renderResumen() {
-  document.getElementById('resumen-title').textContent = 'Resumen · Ciclo #' + (currentCycleNumber() + 1);
+  const ciclo = getCycleForMonth(activeMonth);
+  const cicloId = ciclo ? ciclo.id : null;
+  const cicloNum = ciclo ? parseInt(ciclo.id.replace('cycle_','')) : currentCycleNumber();
+  document.getElementById('resumen-title').textContent = 'Resumen · Ciclo #' + (cicloNum + 1);
+  document.getElementById('resumen-sub').textContent = ciclo
+    ? getCycleDates(cicloNum).label : '';
 
   const totalInicial = categories.reduce((s, c) => s + c.amount, 0);
-  const gastadoEnCiclo = activeCycle
-    ? expenses.filter(e => e.cycle_id === activeCycle.id).reduce((s, e) => s + e.amount, 0)
+  const gastadoEnCiclo = cicloId
+    ? expenses.filter(e => e.cycle_id === cicloId).reduce((s, e) => s + e.amount, 0)
     : 0;
   const totalDisponible = categories.reduce((s, c) => s + balanceForCat(c.id), 0);
 
@@ -895,8 +912,8 @@ function renderResumen() {
   document.getElementById('rs-disponible').textContent = fmt(totalDisponible);
   document.getElementById('rs-disponible').className = 'card-value ' + (totalDisponible < 0 ? 'red' : 'green');
 
-  const gastosDelCiclo = activeCycle
-    ? expenses.filter(e => e.cycle_id === activeCycle.id)
+  const gastosDelCiclo = cicloId
+    ? expenses.filter(e => e.cycle_id === cicloId)
     : [];
   const esCicloNuevo = gastosDelCiclo.length === 0;
 
@@ -910,14 +927,14 @@ function renderResumen() {
         <div id="rs-mes-banner" style="background:rgba(107,99,255,.1);border:1px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
           <span style="font-size:24px">🎉</span>
           <div>
-            <div style="font-weight:600;font-size:14px">Nuevo ciclo — sin gastos aún</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px">Los saldos disponibles se arrastraron del ciclo anterior.</div>
+            <div style="font-weight:600;font-size:14px">Ciclo #${cicloNum + 1} — sin gastos aún</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">Seleccioná otro mes para ver datos de ese ciclo.</div>
           </div>
         </div>`);
     }
     catCards.innerHTML = categories.map((cat, i) => {
       const balance = balanceForCat(cat.id);
-      const spent = cycleExpenses(cat.id);
+      const spent = cycleExpenses(cat.id, cicloId);
       const pct = (balance + spent) > 0 ? Math.min(100, (spent / (spent + balance)) * 100) : 0;
       const color = getColor(i);
       const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
@@ -952,7 +969,7 @@ function renderResumen() {
 
   const catData = categories.map((cat, i) => ({
     name: cat.name, emoji: cat.emoji||'📁',
-    spent: cycleExpenses(cat.id),
+    spent: cycleExpenses(cat.id, cicloId),
     color: getColor(i)
   })).filter(d => d.spent > 0).sort((a,b) => b.spent - a.spent);
 
