@@ -331,7 +331,7 @@
           <div class="card-value" id="rs-total">₲ 0</div>
         </div>
         <div class="card">
-          <div class="card-label">Total Gastado (ciclo)</div>
+          <div class="card-label">Total Gastado (mes)</div>
           <div class="card-value red" id="rs-gastado">₲ 0</div>
         </div>
         <div class="card">
@@ -348,7 +348,7 @@
           <div class="chart-legend" id="donutLegend"></div>
         </div>
         <div class="card">
-          <div class="section-title">Top gastos del ciclo</div>
+          <div class="section-title">Top gastos del mes</div>
           <div id="top-cats"></div>
         </div>
       </div>
@@ -495,8 +495,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── CICLOS ───────────────────────────────────────────────────────────────────
 // Primer ciclo comienza el 23 de junio de 2024
-const CYCLE_EPOCH = new Date(2024, 5, 23); // June 23, 2024
-const CYCLE_DAYS = 30;
+const CYCLE_START_DAY = 23; // Todos los ciclos empiezan el día 23 de cada mes
 
 // ─── ESTADO ───────────────────────────────────────────────────────────────────
 let categories = [];
@@ -537,16 +536,20 @@ function setSyncStatus(status, label) {
 // ─── LÓGICA DE CICLOS ─────────────────────────────────────────────────────────
 function getCycleNumber(fecha) {
   const d = new Date(fecha + 'T12:00');
-  const diff = d - CYCLE_EPOCH;
-  if (diff < 0) return 0;
-  return Math.floor(diff / (CYCLE_DAYS * 86400000));
+  const year = d.getFullYear();
+  const month = d.getMonth();
+  // Si el día es anterior al 23, pertenece al ciclo que empezó el mes pasado
+  const adjMonth = d.getDate() < CYCLE_START_DAY ? month - 1 : month;
+  // Meses desde junio 2024
+  return (year - 2024) * 12 + (adjMonth - 5);
 }
 
 function getCycleDates(numero) {
-  const start = new Date(CYCLE_EPOCH);
-  start.setDate(start.getDate() + numero * CYCLE_DAYS);
-  const end = new Date(start);
-  end.setDate(end.getDate() + CYCLE_DAYS);
+  const totalMonths = 5 + numero; // 5 = junio (0-indexed)
+  const year = 2024 + Math.floor(totalMonths / 12);
+  const month = totalMonths % 12;
+  const start = new Date(year, month, CYCLE_START_DAY);
+  const end = new Date(year, month + 1, CYCLE_START_DAY);
   return {
     start: toDateStr(start),
     end: toDateStr(end),
@@ -600,17 +603,6 @@ function actualizarUICiclo() {
   if (el) {
     el.innerHTML = '📅 Ciclo <strong>#' + (num + 1) + '</strong> · ' + dates.label;
   }
-}
-
-function getCycleForMonth(monthKey) {
-  if (!monthKey) return activeCycle;
-  const [y, m] = monthKey.split('-');
-  const midMonth = new Date(+y, +m-1, 15);
-  const num = getCycleNumber(toDateStr(midMonth));
-  const existing = cycles.find(c => c.id === 'cycle_' + num);
-  if (existing) return existing;
-  const dates = getCycleDates(num);
-  return { id: 'cycle_' + num, start_date: dates.start, end_date: dates.end };
 }
 
 function cycleExpenses(catId, cycleId) {
@@ -894,51 +886,41 @@ function renderGastos() {
 
 // ─── RESUMEN ──────────────────────────────────────────────────────────────────
 function renderResumen() {
-  const ciclo = getCycleForMonth(activeMonth);
-  const cicloId = ciclo ? ciclo.id : null;
-  const cicloNum = ciclo ? parseInt(ciclo.id.replace('cycle_','')) : currentCycleNumber();
-  document.getElementById('resumen-title').textContent = 'Resumen · Ciclo #' + (cicloNum + 1);
-  document.getElementById('resumen-sub').textContent = ciclo
-    ? getCycleDates(cicloNum).label : '';
+  const gastosDelMes = expenses.filter(e => e.month === activeMonth);
+
+  document.getElementById('resumen-title').textContent = 'Resumen · ' + monthLabel(activeMonth);
+  document.getElementById('resumen-sub').textContent = 'Gastos del mes calendario';
 
   const totalInicial = categories.reduce((s, c) => s + c.amount, 0);
-  const gastadoEnCiclo = cicloId
-    ? expenses.filter(e => e.cycle_id === cicloId).reduce((s, e) => s + e.amount, 0)
-    : 0;
+  const gastadoEnMes = gastosDelMes.reduce((s, e) => s + e.amount, 0);
   const totalDisponible = categories.reduce((s, c) => s + balanceForCat(c.id), 0);
 
   document.getElementById('rs-total').textContent = fmt(totalInicial);
-  document.getElementById('rs-gastado').textContent = fmt(gastadoEnCiclo);
+  document.getElementById('rs-gastado').textContent = fmt(gastadoEnMes);
   document.getElementById('rs-disponible').textContent = fmt(totalDisponible);
   document.getElementById('rs-disponible').className = 'card-value ' + (totalDisponible < 0 ? 'red' : 'green');
-
-  const gastosDelCiclo = cicloId
-    ? expenses.filter(e => e.cycle_id === cicloId)
-    : [];
-  const esCicloNuevo = gastosDelCiclo.length === 0;
 
   const catCards = document.getElementById('rs-cat-cards');
   if (!categories.length) {
     catCards.innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📋</div><p>Creá categorías en la sección Presupuesto</p></div>';
   } else {
     document.getElementById('rs-mes-banner')?.remove();
-    if (esCicloNuevo) {
+    if (!gastosDelMes.length) {
       catCards.insertAdjacentHTML('beforebegin', `
         <div id="rs-mes-banner" style="background:rgba(107,99,255,.1);border:1px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
-          <span style="font-size:24px">🎉</span>
+          <span style="font-size:24px">📅</span>
           <div>
-            <div style="font-weight:600;font-size:14px">Ciclo #${cicloNum + 1} — sin gastos aún</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px">Seleccioná otro mes para ver datos de ese ciclo.</div>
+            <div style="font-weight:600;font-size:14px">${monthLabel(activeMonth)} — sin gastos</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">No hay gastos registrados en este mes.</div>
           </div>
         </div>`);
     }
     catCards.innerHTML = categories.map((cat, i) => {
       const balance = balanceForCat(cat.id);
-      const spent = cycleExpenses(cat.id, cicloId);
+      const spent = gastosDelMes.filter(e => e.cat_id === cat.id).reduce((s, e) => s + e.amount, 0);
       const pct = (balance + spent) > 0 ? Math.min(100, (spent / (spent + balance)) * 100) : 0;
       const color = getColor(i);
       const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
-      const remColor = balance < 0 ? 'var(--red)' : balance < cat.amount * 0.1 ? 'var(--yellow)' : 'var(--green)';
       return `
       <div class="cat-card" style="border-left-color:${color}">
         <div class="cat-card-header">
@@ -952,7 +934,7 @@ function renderResumen() {
             <div class="cat-card-num-val" style="color:${balance > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(balance)}</div>
           </div>
           <div>
-            <div class="cat-card-num-label">Gastado ciclo</div>
+            <div class="cat-card-num-label">Gastado mes</div>
             <div class="cat-card-num-val" style="color:var(--red)">${fmt(spent)}</div>
           </div>
         </div>
@@ -967,21 +949,20 @@ function renderResumen() {
     }).join('');
   }
 
-  const catData = categories.map((cat, i) => ({
-    name: cat.name, emoji: cat.emoji||'📁',
-    spent: cycleExpenses(cat.id, cicloId),
-    color: getColor(i)
-  })).filter(d => d.spent > 0).sort((a,b) => b.spent - a.spent);
+  const catData = categories.map((cat, i) => {
+    const spent = gastosDelMes.filter(e => e.cat_id === cat.id).reduce((s, e) => s + e.amount, 0);
+    return { name: cat.name, emoji: cat.emoji||'📁', spent, color: getColor(i) };
+  }).filter(d => d.spent > 0).sort((a,b) => b.spent - a.spent);
 
-  drawDonut(catData, gastadoEnCiclo);
+  drawDonut(catData, gastadoEnMes);
 
   const topDiv = document.getElementById('top-cats');
   if (!catData.length) {
-    topDiv.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><p>Sin gastos aún</p></div>';
+    topDiv.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><p>Sin gastos en este mes</p></div>';
     return;
   }
   topDiv.innerHTML = catData.slice(0,5).map(d => {
-    const pct = gastadoEnCiclo > 0 ? Math.round(d.spent/gastadoEnCiclo*100) : 0;
+    const pct = gastadoEnMes > 0 ? Math.round(d.spent/gastadoEnMes*100) : 0;
     return '<div style="margin-bottom:14px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">' +
         '<span style="font-size:13px">'+d.emoji+' '+d.name+'</span>' +
