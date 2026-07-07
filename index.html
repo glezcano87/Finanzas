@@ -123,7 +123,7 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 16px 20px;
     display: grid;
-    grid-template-columns: 1fr 160px 160px 160px 36px;
+    grid-template-columns: 1fr 120px 120px 120px 120px 36px;
     align-items: center; gap: 16px;
   }
   .budget-row.header {
@@ -273,8 +273,8 @@
     .bottom-nav { display: block; }
     .main { margin-left: 0; padding: 16px 14px 80px; }
     .cards-row { grid-template-columns: 1fr; }
-    .budget-row { grid-template-columns: 1fr 130px 36px; }
-    .budget-row .gastado-col, .budget-row .restante-col { display: none; }
+    .budget-row { grid-template-columns: 1fr 100px 36px; }
+    .budget-row .gastado-col, .budget-row .restante-col, .budget-row .presup-ciclo { display: none; }
     .summary-grid { grid-template-columns: 1fr; }
     .page-header h1 { font-size: 20px; }
     .tabs { flex-wrap: wrap; }
@@ -331,11 +331,11 @@
           <div class="card-value" id="rs-total">₲ 0</div>
         </div>
         <div class="card">
-          <div class="card-label">Total Gastado (mes)</div>
+          <div class="card-label">Total Gastado</div>
           <div class="card-value red" id="rs-gastado">₲ 0</div>
         </div>
         <div class="card">
-          <div class="card-label">Disponible</div>
+          <div class="card-label">Disponible (acumulado)</div>
           <div class="card-value green" id="rs-disponible">₲ 0</div>
         </div>
       </div>
@@ -348,7 +348,7 @@
           <div class="chart-legend" id="donutLegend"></div>
         </div>
         <div class="card">
-          <div class="section-title">Top gastos del mes</div>
+          <div class="section-title">Top gastos</div>
           <div id="top-cats"></div>
         </div>
       </div>
@@ -358,7 +358,7 @@
     <section class="page" id="page-presupuesto">
       <div class="page-header">
         <h1>Presupuesto por Ciclos</h1>
-        <p>Cada ciclo dura 30 días. El saldo no gastado se arrastra al próximo ciclo.</p>
+        <p>Ciclos del 23 de cada mes. El saldo no gastado se acumula.</p>
       </div>
       <div class="tabs">
         <div class="tab active" onclick="filterCat('todos', this)">Todos</div>
@@ -368,9 +368,10 @@
       <div class="budget-grid">
         <div class="budget-row header">
           <div>Categoría</div>
-          <div>Saldo Actual</div>
+          <div class="presup-ciclo">Presup. Ciclo</div>
           <div class="gastado-col">Gastado ciclo</div>
-          <div class="restante-col">Presup. Inicial</div>
+          <div class="restante-col">Restante ciclo</div>
+          <div class="saldo-col">Saldo Acumulado</div>
           <div></div>
         </div>
         <div id="cat-list"></div>
@@ -645,9 +646,8 @@ async function loadAll() {
 }
 
 async function initCurrentBalances() {
-  // Para categorías sin current_balance: calcular como amount - gastos totales
   for (const cat of categories) {
-    if (cat.current_balance === null || cat.current_balance === undefined || cat.current_balance === 0) {
+    if (cat.current_balance === null || cat.current_balance === undefined) {
       const totalSpent = expenses
         .filter(e => e.cat_id === cat.id)
         .reduce((s, e) => s + e.amount, 0);
@@ -698,9 +698,10 @@ function goPage(p, el) {
 function balanceForCat(catId) {
   const cat = categories.find(c => c.id === catId);
   if (!cat) return 0;
-  // Si tiene current_balance lo usamos, sino el amount original
-  return (cat.current_balance !== null && cat.current_balance !== undefined && cat.current_balance > 0)
-    ? cat.current_balance : cat.amount;
+  if (cat.current_balance !== null && cat.current_balance !== undefined) {
+    return cat.current_balance;
+  }
+  return cat.amount;
 }
 
 function filterCat(f, el) {
@@ -722,7 +723,8 @@ function renderCats() {
     const i = categories.findIndex(c => c.id === cat.id);
     const balance = balanceForCat(cat.id);
     const spentInCycle = cycleExpenses(cat.id);
-    const pct = balance > 0 ? Math.min(100, (spentInCycle / (spentInCycle + balance)) * 100) : 0;
+    const restante = cat.amount - spentInCycle;
+    const pct = cat.amount > 0 ? Math.min(100, (spentInCycle / cat.amount) * 100) : 0;
     const color = getColor(i);
     const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
     return `
@@ -734,9 +736,10 @@ function renderCats() {
           <span class="tag tag-${cat.type}">${cat.type==='fijo'?'Fijo':'Variable'}</span>
         </div>
       </div>
-      <div class="mono">${fmt(balance)}</div>
+      <div class="mono presup-ciclo" style="color:var(--text)">${fmt(cat.amount)}</div>
       <div class="mono gastado-col" style="color:var(--red)">${fmt(spentInCycle)}</div>
-      <div class="mono restante-col" style="color:var(--muted)">${fmt(cat.amount)}</div>
+      <div class="mono restante-col" style="color:${restante < 0 ? 'var(--red)' : 'var(--muted)'}">${fmt(restante)}</div>
+      <div class="mono saldo-col" style="color:${balance > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(balance)}</div>
       <button class="btn-icon" onclick="deleteCat('${cat.id}')">×</button>
       <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${barColor}"></div></div>
     </div>`;
@@ -819,10 +822,10 @@ async function saveGasto() {
     return;
   }
 
-  // 2. Descontar del current_balance de la categoría
+  // 2. Descontar del current_balance (puede quedar negativo = sobregiro)
   const cat = categories.find(c => c.id === cat_id);
   if (cat && (cat.current_balance !== null && cat.current_balance !== undefined)) {
-    const nuevoBalance = Math.max(0, cat.current_balance - amount);
+    const nuevoBalance = cat.current_balance - amount;
     await db.from('categories').update({ current_balance: nuevoBalance }).eq('id', cat_id);
   }
 
@@ -886,17 +889,26 @@ function renderGastos() {
 
 // ─── RESUMEN ──────────────────────────────────────────────────────────────────
 function renderResumen() {
-  const gastosDelMes = expenses.filter(e => e.month === activeMonth);
+  function getDesde23() {
+    const hoy = new Date();
+    const anio = hoy.getFullYear();
+    const mes = hoy.getMonth();
+    if (hoy.getDate() >= 23) return toDateStr(new Date(anio, mes, 23));
+    return toDateStr(new Date(anio, mes - 1, 23));
+  }
+  const desde = getDesde23();
+  const hoy = toDateStr(new Date());
+  const gastosDelMes = expenses.filter(e => e.date >= desde && e.date <= hoy);
 
-  document.getElementById('resumen-title').textContent = 'Resumen · ' + monthLabel(activeMonth);
-  document.getElementById('resumen-sub').textContent = 'Gastos del mes calendario';
+  document.getElementById('resumen-title').textContent = 'Resumen';
+  document.getElementById('resumen-sub').textContent = 'Gastos desde el 23 hasta hoy';
 
   const totalInicial = categories.reduce((s, c) => s + c.amount, 0);
-  const gastadoEnMes = gastosDelMes.reduce((s, e) => s + e.amount, 0);
+  const gastadoEnPeriodo = gastosDelMes.reduce((s, e) => s + e.amount, 0);
   const totalDisponible = categories.reduce((s, c) => s + balanceForCat(c.id), 0);
 
   document.getElementById('rs-total').textContent = fmt(totalInicial);
-  document.getElementById('rs-gastado').textContent = fmt(gastadoEnMes);
+  document.getElementById('rs-gastado').textContent = fmt(gastadoEnPeriodo);
   document.getElementById('rs-disponible').textContent = fmt(totalDisponible);
   document.getElementById('rs-disponible').className = 'card-value ' + (totalDisponible < 0 ? 'red' : 'green');
 
@@ -910,15 +922,15 @@ function renderResumen() {
         <div id="rs-mes-banner" style="background:rgba(107,99,255,.1);border:1px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
           <span style="font-size:24px">📅</span>
           <div>
-            <div style="font-weight:600;font-size:14px">${monthLabel(activeMonth)} — sin gastos</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px">No hay gastos registrados en este mes.</div>
+            <div style="font-weight:600;font-size:14px">Sin gastos desde el 23</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">No hay gastos registrados en este período.</div>
           </div>
         </div>`);
     }
     catCards.innerHTML = categories.map((cat, i) => {
       const balance = balanceForCat(cat.id);
       const spent = gastosDelMes.filter(e => e.cat_id === cat.id).reduce((s, e) => s + e.amount, 0);
-      const pct = (balance + spent) > 0 ? Math.min(100, (spent / (spent + balance)) * 100) : 0;
+      const pct = cat.amount > 0 ? Math.min(100, (spent / cat.amount) * 100) : 0;
       const color = getColor(i);
       const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
       return `
@@ -930,11 +942,11 @@ function renderResumen() {
         </div>
         <div class="cat-card-nums">
           <div>
-            <div class="cat-card-num-label">Disponible</div>
+            <div class="cat-card-num-label">Disponible (acum.)</div>
             <div class="cat-card-num-val" style="color:${balance > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(balance)}</div>
           </div>
           <div>
-            <div class="cat-card-num-label">Gastado mes</div>
+            <div class="cat-card-num-label">Gastado</div>
             <div class="cat-card-num-val" style="color:var(--red)">${fmt(spent)}</div>
           </div>
         </div>
@@ -942,7 +954,7 @@ function renderResumen() {
           <div class="progress-fill" style="width:${pct}%;background:${barColor}"></div>
         </div>
         <div class="cat-card-disponible">
-          <span class="cat-card-disponible-label">Presup. inicial</span>
+          <span class="cat-card-disponible-label">Presup. ciclo</span>
           <span class="cat-card-disponible-val" style="color:var(--muted)">${fmt(cat.amount)}</span>
         </div>
       </div>`;
@@ -954,15 +966,15 @@ function renderResumen() {
     return { name: cat.name, emoji: cat.emoji||'📁', spent, color: getColor(i) };
   }).filter(d => d.spent > 0).sort((a,b) => b.spent - a.spent);
 
-  drawDonut(catData, gastadoEnMes);
+  drawDonut(catData, gastadoEnPeriodo);
 
   const topDiv = document.getElementById('top-cats');
   if (!catData.length) {
-    topDiv.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><p>Sin gastos en este mes</p></div>';
+    topDiv.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><p>Sin gastos desde el 23</p></div>';
     return;
   }
   topDiv.innerHTML = catData.slice(0,5).map(d => {
-    const pct = gastadoEnMes > 0 ? Math.round(d.spent/gastadoEnMes*100) : 0;
+    const pct = gastadoEnPeriodo > 0 ? Math.round(d.spent/gastadoEnPeriodo*100) : 0;
     return '<div style="margin-bottom:14px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">' +
         '<span style="font-size:13px">'+d.emoji+' '+d.name+'</span>' +
