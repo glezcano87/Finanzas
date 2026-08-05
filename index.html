@@ -308,7 +308,7 @@
       </div>
     </nav>
     <div class="month-selector">
-      <label>Ver mes calendario</label>
+      <label>Ver ciclo</label>
       <select id="monthSelect" onchange="onMonthChange()"></select>
     </div>
     <div class="sync-status">
@@ -667,21 +667,36 @@ db.channel('changes')
   .subscribe();
 
 // ─── MESES ────────────────────────────────────────────────────────────────────
+// activeCycleId: ID del ciclo que estamos viendo (null = ciclo activo)
+let activeCycleId = null;
+
+function cycleLabel(c) {
+  const s = new Date(c.start_date + 'T12:00');
+  const e = new Date(c.end_date + 'T12:00');
+  const fmt = d => d.toLocaleDateString('es', { day: '2-digit', month: 'short' });
+  return fmt(s) + ' → ' + fmt(e);
+}
+
+function getViewCycle() {
+  if (activeCycleId) return cycles.find(c => c.id === activeCycleId) || activeCycle;
+  return activeCycle;
+}
+
 function buildMonthOptions() {
   const sel = document.getElementById('monthSelect');
-  const usedMonths = new Set([currentMonthKey()]);
-  expenses.forEach(e => usedMonths.add(e.month));
-  const sorted = [...usedMonths].sort().reverse();
-  if (activeMonth !== currentMonthKey()) {
-    if (!usedMonths.has(activeMonth)) activeMonth = currentMonthKey();
-  }
-  sel.innerHTML = sorted.map(k =>
-    `<option value="${k}" ${k===activeMonth?'selected':''}>${monthLabel(k)}</option>`
+  if (!cycles.length) return;
+  // ordenar ciclos más reciente primero
+  const sorted = [...cycles].sort((a, b) => b.start_date.localeCompare(a.start_date));
+  const viewId = activeCycleId || (activeCycle ? activeCycle.id : '');
+  sel.innerHTML = sorted.map(c =>
+    `<option value="${c.id}" ${c.id === viewId ? 'selected' : ''}>${cycleLabel(c)}</option>`
   ).join('');
 }
 
 function onMonthChange() {
-  activeMonth = document.getElementById('monthSelect').value;
+  activeCycleId = document.getElementById('monthSelect').value;
+  // si eligió el ciclo activo, poner null
+  if (activeCycle && activeCycleId === activeCycle.id) activeCycleId = null;
   renderAll();
 }
 
@@ -852,8 +867,15 @@ async function deleteGasto(id) {
 }
 
 function renderGastos() {
+  const viewCycle = getViewCycle();
   const filterBar = document.getElementById('filter-cats');
-  const usedCatIds = [...new Set(expenses.filter(e => e.month === activeMonth).map(e => e.cat_id))];
+
+  // filtrar por cycle_id del ciclo seleccionado
+  const expsCiclo = viewCycle
+    ? expenses.filter(e => e.cycle_id === viewCycle.id)
+    : [];
+
+  const usedCatIds = [...new Set(expsCiclo.map(e => e.cat_id))];
   filterBar.innerHTML =
     '<div class="tab '+(gastoFilter==='all'?'active':'')+'" onclick="setGastoFilter(\'all\')">Todos</div>' +
     usedCatIds.map(cid => {
@@ -862,7 +884,7 @@ function renderGastos() {
       return '<div class="tab '+(gastoFilter===cid?'active':'')+'" onclick="setGastoFilter(\''+cid+'\')">'+(cat.emoji||'📁')+' '+cat.name+'</div>';
     }).join('');
 
-  let exps = expenses.filter(e => e.month === activeMonth);
+  let exps = expsCiclo;
   if (gastoFilter !== 'all') exps = exps.filter(e => e.cat_id === gastoFilter);
 
   const list = document.getElementById('expense-list');
@@ -889,23 +911,23 @@ function renderGastos() {
 
 // ─── RESUMEN ──────────────────────────────────────────────────────────────────
 function renderResumen() {
-  function getDesde23() {
-    const hoy = new Date();
-    const anio = hoy.getFullYear();
-    const mes = hoy.getMonth();
-    if (hoy.getDate() >= 23) return toDateStr(new Date(anio, mes, 23));
-    return toDateStr(new Date(anio, mes - 1, 23));
-  }
-  const desde = getDesde23();
-  const hoy = toDateStr(new Date());
-  const gastosDelMes = expenses.filter(e => e.date >= desde && e.date <= hoy);
+  const viewCycle = getViewCycle();
+  const esCicloActual = !activeCycleId || (activeCycle && activeCycleId === activeCycle.id);
 
-  document.getElementById('resumen-title').textContent = 'Resumen';
-  document.getElementById('resumen-sub').textContent = 'Gastos desde el 23 hasta hoy';
+  // Filtrar gastos del ciclo seleccionado por cycle_id
+  const gastosDelCiclo = viewCycle
+    ? expenses.filter(e => e.cycle_id === viewCycle.id)
+    : [];
+
+  // Título y subtítulo
+  document.getElementById('resumen-title').textContent = esCicloActual ? 'Resumen · Ciclo Actual' : 'Resumen · Ciclo Anterior';
+  document.getElementById('resumen-sub').textContent = viewCycle ? cycleLabel(viewCycle) : '—';
 
   const totalInicial = categories.reduce((s, c) => s + c.amount, 0);
-  const gastadoEnPeriodo = gastosDelMes.reduce((s, e) => s + e.amount, 0);
-  const totalDisponible = categories.reduce((s, c) => s + balanceForCat(c.id), 0);
+  const gastadoEnPeriodo = gastosDelCiclo.reduce((s, e) => s + e.amount, 0);
+  const totalDisponible = esCicloActual
+    ? categories.reduce((s, c) => s + balanceForCat(c.id), 0)
+    : totalInicial - gastadoEnPeriodo;
 
   document.getElementById('rs-total').textContent = fmt(totalInicial);
   document.getElementById('rs-gastado').textContent = fmt(gastadoEnPeriodo);
@@ -917,22 +939,23 @@ function renderResumen() {
     catCards.innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📋</div><p>Creá categorías en la sección Presupuesto</p></div>';
   } else {
     document.getElementById('rs-mes-banner')?.remove();
-    if (!gastosDelMes.length) {
+    if (!gastosDelCiclo.length) {
       catCards.insertAdjacentHTML('beforebegin', `
         <div id="rs-mes-banner" style="background:rgba(107,99,255,.1);border:1px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
           <span style="font-size:24px">📅</span>
           <div>
-            <div style="font-weight:600;font-size:14px">Sin gastos desde el 23</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px">No hay gastos registrados en este período.</div>
+            <div style="font-weight:600;font-size:14px">Sin gastos en este ciclo</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">${viewCycle ? cycleLabel(viewCycle) : ''}</div>
           </div>
         </div>`);
     }
     catCards.innerHTML = categories.map((cat, i) => {
-      const balance = balanceForCat(cat.id);
-      const spent = gastosDelMes.filter(e => e.cat_id === cat.id).reduce((s, e) => s + e.amount, 0);
+      const spent = gastosDelCiclo.filter(e => e.cat_id === cat.id).reduce((s, e) => s + e.amount, 0);
+      const balance = esCicloActual ? balanceForCat(cat.id) : cat.amount - spent;
       const pct = cat.amount > 0 ? Math.min(100, (spent / cat.amount) * 100) : 0;
       const color = getColor(i);
       const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
+      const balColor = balance >= 0 ? 'var(--green)' : 'var(--red)';
       return `
       <div class="cat-card" style="border-left-color:${color}">
         <div class="cat-card-header">
@@ -942,8 +965,8 @@ function renderResumen() {
         </div>
         <div class="cat-card-nums">
           <div>
-            <div class="cat-card-num-label">Disponible (acum.)</div>
-            <div class="cat-card-num-val" style="color:${balance > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(balance)}</div>
+            <div class="cat-card-num-label">${esCicloActual ? 'Disponible' : 'Saldo'}</div>
+            <div class="cat-card-num-val" style="color:${balColor}">${fmt(balance)}</div>
           </div>
           <div>
             <div class="cat-card-num-label">Gastado</div>
@@ -962,7 +985,7 @@ function renderResumen() {
   }
 
   const catData = categories.map((cat, i) => {
-    const spent = gastosDelMes.filter(e => e.cat_id === cat.id).reduce((s, e) => s + e.amount, 0);
+    const spent = gastosDelCiclo.filter(e => e.cat_id === cat.id).reduce((s, e) => s + e.amount, 0);
     return { name: cat.name, emoji: cat.emoji||'📁', spent, color: getColor(i) };
   }).filter(d => d.spent > 0).sort((a,b) => b.spent - a.spent);
 
@@ -970,7 +993,7 @@ function renderResumen() {
 
   const topDiv = document.getElementById('top-cats');
   if (!catData.length) {
-    topDiv.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><p>Sin gastos desde el 23</p></div>';
+    topDiv.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><p>Sin gastos en este ciclo</p></div>';
     return;
   }
   topDiv.innerHTML = catData.slice(0,5).map(d => {
