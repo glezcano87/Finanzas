@@ -1069,7 +1069,35 @@ function toggleMobileMes() {
 
 function onMonthChangeMobile() {
   activeMonth = document.getElementById('monthSelectMobile').value;
-  document.getElementById('monthSelect').value = activeMonth;
+  
+  // Find the cycle that contains this month and set activeCycleId
+  var matchedCycle = null;
+  if (cycles && cycles.length) {
+    matchedCycle = cycles.find(function(cyc) {
+      // Check if the month falls within this cycle's range
+      var cycStart = cyc.start_date ? cyc.start_date.substring(0, 7) : '';
+      var cycEnd = cyc.end_date ? cyc.end_date.substring(0, 7) : '';
+      return activeMonth >= cycStart && activeMonth <= cycEnd;
+    });
+    if (!matchedCycle) {
+      // Fallback: find cycle whose start_date month matches
+      matchedCycle = cycles.find(function(cyc) {
+        return cyc.start_date && cyc.start_date.startsWith(activeMonth);
+      });
+    }
+  }
+  
+  if (matchedCycle) {
+    activeCycleId = (activeCycle && matchedCycle.id === activeCycle.id) ? null : matchedCycle.id;
+  } else {
+    activeCycleId = null;
+  }
+
+  // Sync desktop select
+  var desktopSel = document.getElementById('monthSelect');
+  if (desktopSel) {
+    desktopSel.value = activeCycleId || (activeCycle ? activeCycle.id : '');
+  }
   document.getElementById('bn-mes-label').textContent = monthLabel(activeMonth).split(' ')[0];
   closeModal('mes');
   renderAll();
