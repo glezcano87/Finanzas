@@ -429,7 +429,7 @@
 <!-- MODAL CATEGORIA -->
 <div class="modal-overlay" id="modal-cat">
   <div class="modal">
-    <h2>Nueva Categoría</h2>
+    <h2 id="modal-cat-title">Nueva Categoría</h2>
     <div class="form-group">
       <label>Nombre</label>
       <input id="cat-name" type="text" placeholder="Ej: Supermercado">
@@ -755,14 +755,31 @@ function renderCats() {
       <div class="mono gastado-col" style="color:var(--red)">${fmt(spentInCycle)}</div>
       <div class="mono restante-col" style="color:${restante < 0 ? 'var(--red)' : 'var(--muted)'}">${fmt(restante)}</div>
       <div class="mono saldo-col" style="color:${balance > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(balance)}</div>
+      <button class="btn-icon" style="color:var(--accent2);border-color:var(--accent)" onclick="editCat('${cat.id}')">✏️</button>
       <button class="btn-icon" onclick="deleteCat('${cat.id}')">×</button>
       <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${barColor}"></div></div>
     </div>`;
   }).join('');
 }
 
+let editingCatId = null;
+
+function editCat(id) {
+  const cat = categories.find(c => c.id === id);
+  if (!cat) return;
+  editingCatId = id;
+  document.getElementById('modal-cat-title').textContent = 'Editar Categoría';
+  document.getElementById('cat-name').value = cat.name;
+  document.getElementById('cat-amount').value = cat.amount;
+  document.getElementById('cat-emoji').value = cat.emoji || '';
+  document.getElementById('cat-type').value = cat.type;
+  document.getElementById('modal-cat').classList.add('open');
+}
+
 function openModal(type) {
   if (type === 'cat') {
+    editingCatId = null;
+    document.getElementById('modal-cat-title').textContent = 'Nueva Categoría';
     document.getElementById('cat-name').value = '';
     document.getElementById('cat-amount').value = '';
     document.getElementById('cat-emoji').value = '';
@@ -791,14 +808,30 @@ async function saveCat() {
   const btn = document.getElementById('btn-save-cat');
   btn.disabled = true; btn.textContent = 'Guardando...';
   setSyncStatus('loading', 'Guardando...');
-  // Al crear categoría, current_balance = amount (presupuesto completo disponible)
-  const { error } = await db.from('categories').insert({
-    id: Date.now().toString(),
-    name, amount, type, emoji,
-    current_balance: amount
-  });
+
+  let error;
+  if (editingCatId) {
+    // EDITAR categoría existente
+    const cat = categories.find(c => c.id === editingCatId);
+    const oldAmount = cat ? cat.amount : 0;
+    const diff = amount - oldAmount; // diferencia de presupuesto
+    const newBalance = (cat && cat.current_balance !== null && cat.current_balance !== undefined)
+      ? cat.current_balance + diff
+      : amount;
+    ({ error } = await db.from('categories').update({
+      name, amount, type, emoji, current_balance: newBalance
+    }).eq('id', editingCatId));
+  } else {
+    // NUEVA categoría
+    ({ error } = await db.from('categories').insert({
+      id: Date.now().toString(),
+      name, amount, type, emoji,
+      current_balance: amount
+    }));
+  }
+
   btn.disabled = false; btn.textContent = 'Guardar';
-  if (!error) { closeModal('cat'); await loadAll(); }
+  if (!error) { editingCatId = null; closeModal('cat'); await loadAll(); }
   else { setSyncStatus('error', 'Error al guardar'); alert('Error: ' + error.message); }
 }
 
