@@ -376,7 +376,10 @@
         </div>
         <div id="cat-list"></div>
       </div>
-      <button class="add-btn" onclick="openModal('cat')">＋ Nueva categoría</button>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+<button class="add-btn" onclick="openModal('cat')">＋ Nueva categoría</button>
+<button class="add-btn" id="btn-reset-saldos" onclick="reiniciarSaldos()">↺ Reiniciar saldos</button>
+</div>
     </section>
 
     <!-- GASTOS -->
@@ -588,12 +591,43 @@ async function ensureActiveCycle() {
     if (error && !error.message.includes('duplicate')) {
       console.error('Error creando ciclo:', error);
     }
-    activeCycle = payload;
+    if (!error) await acumularPresupuesto(num);
+activeCycle = payload;
     cycles.unshift(payload);
   }
 
   actualizarUICiclo();
   return activeCycle;
+}
+
+async function acumularPresupuesto(num) {
+const ultimo = cycles[0];
+const ciclos = ultimo ? Math.max(1, num - getCycleNumber(ultimo.start_date)) : 1;
+await Promise.all(categories
+.filter(c => c.current_balance !== null && c.current_balance !== undefined)
+.map(async c => {
+const nuevoSaldo = c.current_balance + c.amount * ciclos;
+const { error } = await db.from('categories').update({ current_balance: nuevoSaldo }).eq('id', c.id);
+if (error) console.error('Error acumulando presupuesto:', error);
+else c.current_balance = nuevoSaldo;
+}));
+}
+
+async function cycleIdForDate(date) {
+const actual = activeCycle ? activeCycle.id : null;
+if (!date) return actual;
+const encontrado = cycles.find(c => c.start_date <= date && c.end_date > date);
+if (encontrado) return encontrado.id;
+const num = getCycleNumber(date);
+if (num > currentCycleNumber()) return actual;
+const id = 'cycle_' + num;
+if (cycles.some(c => c.id === id)) return id;
+const dates = getCycleDates(num);
+const payload = { id, start_date: dates.start, end_date: dates.end, is_active: false };
+const { error } = await db.from('cycles').insert(payload);
+if (error && !error.message.includes('duplicate')) throw error;
+cycles.push(payload);
+return id;
 }
 
 function actualizarUICiclo() {
@@ -602,7 +636,7 @@ function actualizarUICiclo() {
   const dates = getCycleDates(num);
   const el = document.getElementById('cycleInfo');
   if (el) {
-    el.innerHTML = '📅 Ciclo <strong>#' + (num + 1) + '</strong> · ' + dates.label;
+    el.innerHTML = '📅 Ciclo <strong>#' + num + '</strong> · ' + dates.label;
   }
 }
 
@@ -835,6 +869,24 @@ async function saveCat() {
   else { setSyncStatus('error', 'Error al guardar'); alert('Error: ' + error.message); }
 }
 
+async function reiniciarSaldos() {
+if (!categories.length) return;
+if (!confirm('¿Reiniciar los saldos? Cada categoría vuelve a su presupuesto del ciclo y se pierde el saldo acumulado. Los gastos registrados no se borran.')) return;
+const btn = document.getElementById('btn-reset-saldos');
+btn.disabled = true;
+setSyncStatus('loading', 'Reiniciando...');
+const results = await Promise.all(categories.map(c =>
+db.from('categories').update({ current_balance: c.amount }).eq('id', c.id)
+));
+btn.disabled = false;
+const failed = results.find(r => r.error);
+await loadAll();
+if (failed) {
+setSyncStatus('error', 'Error al reiniciar');
+alert('No se pudieron reiniciar todos los saldos: ' + failed.error.message);
+}
+}
+
 async function deleteCat(id) {
   if (!confirm('¿Eliminar esta categoría y todos sus gastos?')) return;
   setSyncStatus('loading', 'Eliminando...');
@@ -852,7 +904,14 @@ async function saveGasto() {
   const date = document.getElementById('g-date').value;
   if (!cat_id || !amount) return;
   const month = date.slice(0,7);
-  const cycle_id = activeCycle ? activeCycle.id : null;
+  let cycle_id;
+try {
+cycle_id = await cycleIdForDate(date);
+} catch (err) {
+setSyncStatus('error', 'Error');
+alert('Error: ' + err.message);
+return;
+}
 
   const btn = document.getElementById('btn-save-gasto');
   btn.disabled = true; btn.textContent = 'Registrando...';
