@@ -339,7 +339,8 @@
           <div class="card-value green" id="rs-disponible">₲ 0</div>
         </div>
       </div>
-      <div class="section-title" style="margin-bottom:12px">Disponible por categoría</div>
+      <div class="card" id="rs-super-semana" style="margin-bottom:24px;display:none"></div>
+<div class="section-title" style="margin-bottom:12px">Disponible por categoría</div>
       <div class="cat-cards" id="rs-cat-cards"></div>
 
       <div class="summary-grid" style="margin-top:24px">
@@ -1130,7 +1131,66 @@ function drawDonut(data, total) {
   }).join('');
 }
 
+const SUPER_COLCHON = 200000;
+
+function cobroMiticActual(hoy) {
+const mes = hoy.getDate() >= 25 ? hoy.getMonth() : hoy.getMonth() - 1;
+let cobro = toDateStr(new Date(hoy.getFullYear(), mes, 25, 12));
+let guardado = null;
+try { guardado = localStorage.getItem('cobroMitic'); } catch (e) {}
+if (guardado && guardado.length === 10 && guardado <= toDateStr(hoy) && guardado > cobro) cobro = guardado;
+return cobro;
+}
+
+function guardarCobroMitic(fecha) {
+try { localStorage.setItem('cobroMitic', fecha); } catch (e) {}
+renderSuperSemana();
+}
+
+function renderSuperSemana() {
+const box = document.getElementById('rs-super-semana');
+if (!box) return;
+const cat = categories.find(c => c.name.trim().toLowerCase() === 'supermercado');
+if (activeCycleId || !cat || cat.amount <= 0) {
+box.innerHTML = '';
+box.style.display = 'none';
+return;
+}
+const hoy = new Date();
+hoy.setHours(12, 0, 0, 0);
+const hoyStr = toDateStr(hoy);
+const cobro = cobroMiticActual(hoy);
+const inicio = new Date(cobro + 'T12:00');
+const dias = Math.round((hoy - inicio) / 86400000);
+const indice = Math.floor(dias / 7);
+const colchon = Math.min(SUPER_COLCHON, cat.amount);
+const semanal = (cat.amount - colchon) / 4;
+const enColchon = indice >= 4;
+const tope = enColchon ? cat.amount : semanal * (indice + 1);
+const gastado = expenses
+.filter(e => e.cat_id === cat.id && e.date >= cobro && e.date <= hoyStr)
+.reduce((s, e) => s + e.amount, 0);
+const queda = tope - gastado;
+const corta = d => d.toLocaleDateString('es', { day: 'numeric', month: 'short' });
+const desde = new Date(inicio);
+desde.setDate(desde.getDate() + indice * 7);
+const hasta = new Date(desde);
+hasta.setDate(hasta.getDate() + 6);
+const periodo = enColchon
+? 'Colchón hasta el próximo cobro'
+: 'Semana ' + (indice + 1) + ' de 4 · ' + corta(desde) + ' al ' + corta(hasta);
+box.style.display = 'block';
+box.innerHTML =
+'<div class="card-label">🛒 Súper disponible</div>' +
+'<div class="card-value" id="rs-super-queda" style="color:' + (queda < 0 ? 'var(--red)' : 'var(--green)') + '">' + fmt(queda) + '</div>' +
+'<div style="font-size:13px;color:var(--muted);margin-top:6px">' + periodo + ' · Gastado desde el cobro: ' + fmt(gastado) + '</div>' +
+'<label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-top:12px">Cobré el MITIC el ' +
+'<input type="date" id="rs-cobro-mitic" value="' + cobro + '" max="' + hoyStr + '" onchange="guardarCobroMitic(this.value)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:6px 8px;font-family:inherit">' +
+'</label>';
+}
+
 function renderAll() {
+renderSuperSemana();
   renderResumen();
   renderCats();
   renderGastos();
