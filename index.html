@@ -359,7 +359,7 @@
     <section class="page" id="page-presupuesto">
       <div class="page-header">
         <h1>Presupuesto por Ciclos</h1>
-        <p>Ciclos del 23 de cada mes. El saldo no gastado se acumula.</p>
+        <p>Ciclos del 25 de cada mes. El saldo no gastado se acumula.</p>
       </div>
       <div class="tabs">
         <div class="tab active" onclick="filterCat('todos', this)">Todos</div>
@@ -500,7 +500,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── CICLOS ───────────────────────────────────────────────────────────────────
 // Primer ciclo comienza el 23 de junio de 2024
-const CYCLE_START_DAY = 23; // Todos los ciclos empiezan el día 23 de cada mes
+const CYCLE_START_DAY = 25; // Todos los ciclos empiezan el día 23 de cada mes
 
 // ─── ESTADO ───────────────────────────────────────────────────────────────────
 let categories = [];
@@ -603,7 +603,8 @@ activeCycle = payload;
 
 async function acumularPresupuesto(num) {
 const ultimo = cycles[0];
-const ciclos = ultimo ? Math.max(1, num - getCycleNumber(ultimo.start_date)) : 1;
+const numUltimo = ultimo ? parseInt(String(ultimo.id).replace('cycle_', ''), 10) : NaN;
+const ciclos = isNaN(numUltimo) ? 1 : Math.max(1, num - numUltimo);
 await Promise.all(categories
 .filter(c => c.current_balance !== null && c.current_balance !== undefined)
 .map(async c => {
