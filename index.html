@@ -513,9 +513,16 @@ const CYCLE_START_DAY = 25; // Todos los ciclos empiezan el día 25 de cada mes
 // ═══ ESTADO ══════════════════════════════════════════════════════════════════
 let categories = [], expenses = [], cycles = [], incomes = [], goals = [], people = [], cards = [];
 let hasNew = false;        // true cuando la migración (people/cards/incomes/goals) está corrida
+let hasFuente = false;     // true cuando migracion_mitic_big.sql está corrida
+const FUENTES = [['mitic', 'MITIC'], ['big', 'BIG']];
+const fuenteName = f => f === 'mitic' ? 'MITIC' : f === 'big' ? 'BIG' : '';
+// Sueldo por defecto de una categoría: el único que tiene presupuesto ('' si tiene los dos o ninguno)
+function catFuente(cat) { if (!cat) return ''; const m = +cat.amount_mitic || 0, b = +cat.amount_big || 0; return m && !b ? 'mitic' : b && !m ? 'big' : ''; }
+// Sueldo de un gasto: el marcado, o el de su categoría si tiene uno solo
+function expFuente(e) { return e.fuente || catFuente(catById(e.cat_id)); }
 let activeCycle = null;    // ciclo de hoy
 let activeCycleId = null;  // ciclo que se está viendo (null = actual)
-const ui = { walletIdx: 0, ioRange: 6, insTab: 'io', budFilter: 'todos', mv: { q: '', dir: 'all', person: '', cat: '', scope: 'cycle' }, cardSel: null, hide: false };
+const ui = { walletIdx: 0, ioRange: 6, insTab: 'io', budFilter: 'todos', budFuente: 'todos', mv: { q: '', dir: 'all', person: '', cat: '', fuente: '', scope: 'cycle' }, cardSel: null, hide: false };
 
 const COLORS = ['#6ee0a1','#62cbc6','#e8c06a','#ef9f86','#9cc4ec','#a9c99f','#c9a6f0','#f0b37a','#4fb38a','#d6e07a'];
 const CARD_FACES = {
@@ -691,6 +698,7 @@ async function loadAll() {
     ]);
     if (e1 || e2) throw e1 || e2;
     categories = cats || [];
+    hasFuente = categories.length > 0 && 'amount_mitic' in categories[0];
     expenses = exps || [];
     // Tablas nuevas: si la migración no está corrida, la app sigue funcionando sin ellas
     const extra = await Promise.all(['people', 'cards', 'incomes', 'goals'].map(t => db.from(t).select('*').order('created_at')));
@@ -969,7 +977,7 @@ function txRow(t) {
   const cat = t.kind === 'out' ? catById(t.cat_id) : null;
   const col = t.kind === 'in' ? 'var(--accent)' : catColor(t.cat_id);
   const p = personById(t.person_id), cd = cardById(t.card_id);
-  const meta = [dShort(t.date), t.kind === 'in' ? 'Ingreso' : (cat ? cat.name : 'Sin categoría'), p && p.name, cd && cd.name].filter(Boolean).map(esc).join(' · ');
+  const meta = [dShort(t.date), t.kind === 'in' ? 'Ingreso' : (cat ? cat.name : 'Sin categoría'), hasFuente && t.kind === 'out' && fuenteName(expFuente(t)), p && p.name, cd && cd.name].filter(Boolean).map(esc).join(' · ');
   return '<button class="tx" onclick="openTx(\'' + t.kind + '\',\'' + t.id + '\')"><div class="tx-ic" style="background:color-mix(in srgb, ' + col + ' 14%, transparent);color:' + col + '">' + (t.kind === 'in' ? ic('in') : esc(cat?.emoji || '📁')) + '</div>' +
     '<div class="tx-b"><b>' + esc(t.description) + '</b><small>' + meta + '</small></div><div class="tx-a num amt ' + t.kind + '">' + (t.kind === 'in' ? '+' : '-') + fmt(t.amount).replace('-', '') + '</div></button>';
 }
@@ -1032,6 +1040,7 @@ function pMovimientos() {
     (f.dir === 'all' || t.kind === f.dir) &&
     (!f.person || (f.person === '_none' ? !t.person_id : t.person_id === f.person)) &&
     (!f.cat || t.cat_id === f.cat) &&
+    (!f.fuente || (t.kind === 'out' && (f.fuente === '_none' ? !expFuente(t) : expFuente(t) === f.fuente))) &&
     (!q || (t.description + ' ' + (catById(t.cat_id)?.name || '')).toLowerCase().includes(q)));
   const tin = sum(items.filter(t => t.kind === 'in'), t => t.amount), tout = sum(items.filter(t => t.kind === 'out'), t => t.amount);
   const days = {};
@@ -1045,6 +1054,7 @@ function pMovimientos() {
       '<input class="field grow" placeholder="Buscar un comercio, una nota..." value="' + esc(f.q) + '" oninput="ui.mv.q=this.value;rerenderKeep(this)" id="mvq">' +
       seg([['all', 'Todo'], ['in', 'Entra'], ['out', 'Sale']], f.dir, 'ui.mv.dir') +
       (hasNew ? '<select class="sel" onchange="ui.mv.person=this.value;render()" aria-label="Persona">' + opt('', 'Todos', f.person) + people.map(p => opt(p.id, p.name, f.person)).join('') + opt('_none', 'Sin asignar', f.person) + '</select>' : '') +
+      (hasFuente ? '<select class="sel" onchange="ui.mv.fuente=this.value;render()" aria-label="Sueldo">' + opt('', 'MITIC y BIG', f.fuente) + FUENTES.map(([v, l]) => opt(v, 'Sueldo ' + l, f.fuente)).join('') + opt('_none', 'Sin sueldo marcado', f.fuente) + '</select>' : '') +
       '<select class="sel" onchange="ui.mv.cat=this.value;render()" aria-label="Categoría">' + opt('', 'Todas las categorías', f.cat) + categories.map(c => opt(c.id, (c.emoji || '') + ' ' + c.name, f.cat)).join('') + '</select>' +
       '<select class="sel" onchange="ui.mv.scope=this.value;render()" aria-label="Período">' + opt('cycle', 'Este ciclo', f.scope) + opt('all', 'Todos los ciclos', f.scope) + '</select>' +
     '</div><div class="sum-line"><span>' + items.length + ' movimientos</span>' + (tin ? '<span>Entró <b class="num amt" style="color:var(--good)">' + fmt(tin) + '</b></span>' : '') + '<span>Salió <b class="num amt">' + fmt(tout) + '</b></span></div>' +
@@ -1075,6 +1085,7 @@ function openTx(kind, id) {
     h += '<div class="kv"><span>' + esc(cat.name) + ' en ese ciclo</span><b class="num amt">' + fmt(sp) + ' de ' + fmt(cat.amount) + '</b></div>';
   }
   h += '</div>';
+  if (hasFuente && kind === 'out') h += '<div class="fg"><label>¿Con qué sueldo?</label><select class="sel" onchange="assignTx(\'expenses\',\'' + t.id + '\',\'fuente\',this.value)">' + opt('', 'Sin marcar' + (catFuente(cat) ? ' (cuenta como ' + fuenteName(catFuente(cat)) + ')' : ''), t.fuente) + FUENTES.map(([v, l]) => opt(v, l, t.fuente)).join('') + '</select></div>';
   if (hasNew) {
     const tbl = kind === 'in' ? 'incomes' : 'expenses';
     h += '<div class="fg"><label>¿Quién?</label><select class="sel" onchange="assignTx(\'' + tbl + '\',\'' + t.id + '\',\'person_id\',this.value)">' + opt('', 'Sin asignar', t.person_id) + people.map(p => opt(p.id, p.name, t.person_id)).join('') + '</select></div>';
@@ -1170,6 +1181,18 @@ function pPresupuestos() {
   const c = getViewCycle(), st = cycleStats(c), frac = st.cur ? st.d.frac : 1;
   let cats = categories;
   if (ui.budFilter !== 'todos') cats = cats.filter(x => x.type === ui.budFilter);
+  const fu = hasFuente && ui.budFuente !== 'todos' ? ui.budFuente : '';
+  if (fu) cats = cats.filter(x => +x['amount_' + fu] > 0 || st.exps.some(e => e.cat_id === x.id && expFuente(e) === fu));
+  const budOf = cat => fu ? +cat['amount_' + fu] || 0 : cat.amount;
+  const spentOf = cat => sum(st.exps.filter(e => e.cat_id === cat.id && (!fu || expFuente(e) === fu)), e => e.amount);
+  const fuentePanel = !hasFuente ? '' : '<div class="grid g2">' + FUENTES.map(([f, l]) => {
+    const pres = sum(categories, x => +x['amount_' + f] || 0), gas = sum(st.exps.filter(e => expFuente(e) === f), e => e.amount), q = pres - gas;
+    const pct = pres ? gas / pres * 100 : 0, [cls] = budStatus(gas, pres, frac);
+    return '<div class="glass bud" style="cursor:pointer" onclick="ui.budFuente=ui.budFuente===\'' + f + '\'?\'todos\':\'' + f + '\';render()"><div class="bud-h"><div class="tx-ic" style="background:var(--card-2)">' + (f === 'mitic' ? '💼' : '🏢') + '</div><div><b>Gastos con sueldo ' + l + '</b><small class="amt">' + fmt(pres) + ' presupuestado</small></div>' + (ui.budFuente === f ? '<span class="pill">Filtrando</span>' : '') + '</div>' +
+      '<div class="amt-big num amt" style="' + (q < 0 ? 'color:var(--bad)' : '') + '">' + fmt(Math.abs(q)) + '<span>' + (q < 0 ? 'pasado' : 'queda') + '</span></div>' +
+      '<div class="bar"><i class="' + cls + '" style="width:' + Math.min(100, pct) + '%"></i>' + (st.cur && pres ? '<span class="pace" style="left:' + frac * 100 + '%"></span>' : '') + '</div>' +
+      '<div class="row"><span class="amt">' + fmt(gas) + ' gastado</span><span>' + Math.round(pct) + '%</span></div></div>';
+  }).join('') + '</div>' + (() => { const n = st.exps.filter(e => !expFuente(e)).length; return n ? '<p style="color:var(--muted);margin:-6px 0 16px">' + n + ' gastos del ciclo sin sueldo marcado (' + fmt(sum(st.exps.filter(e => !expFuente(e)), e => e.amount)) + '). Tocalos en Movimientos para marcarlos.</p>' : ''; })();
   const over = categories.filter(x => x.amount > 0 && sum(st.exps.filter(e => e.cat_id === x.id), e => e.amount) > x.amount).length;
   const queda = st.presupuesto - st.gastado;
   const sub = st.cur ? 'Día ' + st.d.elapsed + ' de ' + st.d.total + ' del ciclo. ' + (over ? over + (over === 1 ? ' presupuesto pasado.' : ' presupuestos pasados.') : 'Ningún presupuesto pasado.') + ' Lo que no gastás se acumula para el próximo ciclo.' : 'Ciclo cerrado ' + (c ? cycleLabel(c) : '');
@@ -1180,16 +1203,18 @@ function pPresupuestos() {
       kpi('wallet', 'Queda', fmt(queda), st.cur ? 'para ' + st.d.left + ' días' : 'al cierre') +
       kpi('cal', 'Por día', fmt(st.cur && st.d.left ? Math.max(0, queda) / st.d.left : 0), 'para cerrar dentro del plan') +
     '</div>' +
-    '<div style="margin-bottom:16px">' + seg([['todos', 'Todos'], ['variable', 'Variables'], ['fijo', 'Fijos']], ui.budFilter, 'ui.budFilter') + '</div>' +
+    fuentePanel +
+    '<div style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap">' + seg([['todos', 'Todos'], ['variable', 'Variables'], ['fijo', 'Fijos']], ui.budFilter, 'ui.budFilter') + (hasFuente ? seg([['todos', 'MITIC y BIG'], ['mitic', 'MITIC'], ['big', 'BIG']], ui.budFuente, 'ui.budFuente') : '') + '</div>' +
     '<div class="grid g3">' + cats.map(cat => {
-      const spent = sum(st.exps.filter(e => e.cat_id === cat.id), e => e.amount);
-      const left = cat.amount - spent, pct = cat.amount > 0 ? spent / cat.amount * 100 : (spent ? 100 : 0);
-      const [cls, lbl] = budStatus(spent, cat.amount, frac);
+      const spent = spentOf(cat), amt = budOf(cat);
+      const left = amt - spent, pct = amt > 0 ? spent / amt * 100 : (spent ? 100 : 0);
+      const [cls, lbl] = budStatus(spent, amt, frac);
+      const split = hasFuente ? FUENTES.filter(([f]) => +cat['amount_' + f] > 0).map(([f, l]) => l + ' ' + fmt(cat['amount_' + f])).join(' · ') : '';
       const col = catColor(cat.id), bal = st.cur ? balanceForCat(cat.id) : left;
-      return '<div class="glass bud"><div class="bud-h"><div class="tx-ic" style="background:color-mix(in srgb, ' + col + ' 14%, transparent)">' + esc(cat.emoji || '📁') + '</div><div><b>' + esc(cat.name) + '</b><small class="amt">' + fmt(cat.amount) + ' por ciclo · ' + (cat.type === 'fijo' ? 'Fijo' : 'Variable') + '</small></div><span class="pill ' + cls + '">' + lbl + '</span></div>' +
+      return '<div class="glass bud"><div class="bud-h"><div class="tx-ic" style="background:color-mix(in srgb, ' + col + ' 14%, transparent)">' + esc(cat.emoji || '📁') + '</div><div><b>' + esc(cat.name) + '</b><small class="amt">' + (split || fmt(cat.amount) + ' por ciclo') + ' · ' + (cat.type === 'fijo' ? 'Fijo' : 'Variable') + '</small></div><span class="pill ' + cls + '">' + lbl + '</span></div>' +
         '<div class="amt-big num amt" style="' + (left < 0 ? 'color:var(--bad)' : '') + '">' + fmt(Math.abs(left)) + '<span>' + (left < 0 ? 'pasado' : 'queda') + '</span></div>' +
-        '<div class="bar"><i class="' + cls + '" style="width:' + Math.min(100, pct) + '%"></i>' + (st.cur && cat.amount > 0 ? '<span class="pace" style="left:' + frac * 100 + '%" title="Ritmo: a esta altura del ciclo deberías ir por acá"></span>' : '') + '</div>' +
-        '<div class="row"><span class="amt">' + fmt(spent) + ' gastado</span><span class="amt">' + (left > 0 && st.cur && st.d.left ? fmt(left / st.d.left) + ' por día' : left <= 0 && cat.amount > 0 ? 'No queda este ciclo' : '') + '</span></div>' +
+        '<div class="bar"><i class="' + cls + '" style="width:' + Math.min(100, pct) + '%"></i>' + (st.cur && amt > 0 ? '<span class="pace" style="left:' + frac * 100 + '%" title="Ritmo: a esta altura del ciclo deberías ir por acá"></span>' : '') + '</div>' +
+        '<div class="row"><span class="amt">' + fmt(spent) + ' gastado</span><span class="amt">' + (left > 0 && st.cur && st.d.left ? fmt(left / st.d.left) + ' por día' : left <= 0 && amt > 0 ? 'No queda este ciclo' : '') + '</span></div>' +
         '<div class="row" style="border-top:1px solid var(--line);padding-top:10px"><span>Saldo acumulado</span><b class="num amt" style="color:' + (bal < 0 ? 'var(--bad)' : 'var(--good)') + '">' + fmt(bal) + '</b></div>' +
         '<div class="acts"><button class="btn sm" onclick="formCat(\'' + cat.id + '\')">' + ic('edit') + 'Editar</button><button class="btn sm danger" onclick="deleteCat(\'' + cat.id + '\')" aria-label="Eliminar">' + ic('trash') + '</button></div></div>';
     }).join('') + '<button class="add-tile" onclick="formCat()"><div>' + ic('plus', 'style="width:24px;height:24px"') + '<b>Agregar presupuesto</b>Supermercado, salidas, colegio...</div></button></div>';
@@ -1366,11 +1391,14 @@ function formGasto() {
     { id: 'amount', label: 'Monto (₲)', type: 'number', placeholder: '0', half: true },
     { id: 'date', label: 'Fecha', type: 'date', value: toDateStr(new Date()), half: true }
   ];
+  if (hasFuente) f.push({ id: 'fuente', label: '¿Con qué sueldo?', type: 'select', options: [['', 'Sin marcar']].concat(FUENTES), value: catFuente(categories[0]) });
   if (hasNew) {
     f.push({ id: 'person', label: '¿Quién?', type: 'select', options: opts(people, 'Sin asignar'), value: store.get('me', '') || '', half: true });
     f.push({ id: 'card', label: 'Tarjeta', type: 'select', options: [['', 'Sin asignar']].concat(cards.map(c => [c.id, c.name + (c.last4 ? ' ····' + c.last4 : '')])), value: store.get('lastCard', ''), half: true });
   }
   openForm('Cargar gasto', f, saveGasto, 'Registrar');
+  // Al cambiar la categoría se preselecciona su sueldo (si tiene uno solo)
+  if (hasFuente) document.getElementById('f-cat').onchange = e => { const d = catFuente(catById(e.target.value)); if (d) document.getElementById('f-fuente').value = d; };
 }
 async function saveGasto(v) {
   const cat_id = v.cat, description = v.desc || 'Sin descripción', amount = parseFloat(v.amount) || 0, date = v.date;
@@ -1378,6 +1406,7 @@ async function saveGasto(v) {
   if (!date) return 'Poné la fecha.';
   const cycle_id = await cycleIdForDate(date);
   const row = { id: Date.now().toString(), cat_id, description, amount, date, month: date.slice(0, 7), cycle_id };
+  if (hasFuente) row.fuente = v.fuente || null;
   if (hasNew) { row.person_id = v.person || null; row.card_id = v.card || null; store.set('lastCard', v.card || ''); }
   const { error } = await db.from('expenses').insert(row);
   if (error) return 'Error: ' + error.message;
@@ -1431,19 +1460,24 @@ function formCat(id) {
   const cat = id ? catById(id) : null;
   openForm(cat ? 'Editar presupuesto' : 'Nuevo presupuesto', [
     { id: 'name', label: 'Nombre', value: cat?.name, placeholder: 'Ej: Supermercado' },
-    { id: 'amount', label: 'Presupuesto por ciclo (₲)', type: 'number', value: cat?.amount, placeholder: '0', half: true },
+    ...(hasFuente
+      ? [{ id: 'mitic', label: 'Con sueldo MITIC (₲)', type: 'number', value: cat?.amount_mitic || '', placeholder: '0', half: true },
+         { id: 'big', label: 'Con sueldo BIG (₲)', type: 'number', value: cat?.amount_big || '', placeholder: '0', half: true }]
+      : [{ id: 'amount', label: 'Presupuesto por ciclo (₲)', type: 'number', value: cat?.amount, placeholder: '0', half: true }]),
     { id: 'type', label: 'Tipo', type: 'select', value: cat?.type || 'variable', options: [['variable', 'Variable'], ['fijo', 'Fijo']], half: true },
     { id: 'emoji', label: 'Emoji / ícono', value: cat?.emoji, placeholder: '🛒', max: 4 }
   ], async v => {
-    const name = v.name, amount = parseFloat(v.amount) || 0, type = v.type, emoji = v.emoji || '📁';
+    const name = v.name, type = v.type, emoji = v.emoji || '📁';
+    const split = hasFuente ? { amount_mitic: parseFloat(v.mitic) || 0, amount_big: parseFloat(v.big) || 0 } : {};
+    const amount = hasFuente ? split.amount_mitic + split.amount_big : parseFloat(v.amount) || 0;
     if (!name) return 'Poné un nombre.';
     let error;
     if (cat) {
       const diff = amount - cat.amount;
       const newBalance = (cat.current_balance !== null && cat.current_balance !== undefined) ? cat.current_balance + diff : amount;
-      ({ error } = await db.from('categories').update({ name, amount, type, emoji, current_balance: newBalance }).eq('id', cat.id));
+      ({ error } = await db.from('categories').update({ name, amount, ...split, type, emoji, current_balance: newBalance }).eq('id', cat.id));
     } else {
-      ({ error } = await db.from('categories').insert({ id: Date.now().toString(), name, amount, type, emoji, current_balance: amount }));
+      ({ error } = await db.from('categories').insert({ id: Date.now().toString(), name, amount, ...split, type, emoji, current_balance: amount }));
     }
     if (error) return 'Error: ' + error.message;
     toast('Presupuesto guardado');
